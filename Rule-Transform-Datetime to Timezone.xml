@@ -1,0 +1,134 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE Rule PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<Rule name="Datetime to Timezone" type="Transform">
+  <Description>Parses an incoming ISO8601 Datetime with timezone offset or Date without time or timezone offset components (input) and converts it to a target ZoneId (timezone) passed from the transform attributes map.  Optionally you can also specify a time in hours 0-23 to set when just passing a date without time component.</Description>
+  <Signature>
+    <Inputs>
+      <Argument name="log" type="org.apache.log4j.Logger">
+        <Description>The system logger.</Description>
+      </Argument>
+      <Argument name="idn" type="sailpoint.server.IdnRuleUtil">
+        <Description>Provides access to the SailPoint API utility methods.</Description>
+      </Argument>
+    </Inputs>
+    <Returns>
+      <Argument name="value" type="java.lang.Object">
+        <Description>Value returned for the account attribute, typically a string.</Description>
+      </Argument>
+    </Returns>
+  </Signature>
+  <Source>
+<![CDATA[
+import sailpoint.tools.Util;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.Set;
+
+// 'input' is dynamically bound to the interpreter scope as the transform pipeline input
+// null check, returns null if input is null.
+if (input == null) {
+    log.debug("Incoming input value is null. Skipping conversion.");
+    return null;
+}
+// get the input and also check if String value is empty.
+String inputStr = input.toString().trim();
+if (inputStr.isEmpty()) {
+    log.debug("Incoming input value is empty. Skipping conversion.");
+    return null;
+}
+
+// Optional 'timezone' is dynamically bound to the interpreter scope from the transform attributes map
+String targetZoneStr = "UTC"; 
+try {
+    if(timezone == void) {
+      log.debug("timezone not defined, using default UTC");
+    } else {
+        String tzTmp = timezone.toString().trim();
+        if(!tzTmp.isEmpty()) {
+            targetZoneStr = tzTmp;
+        }
+        Set zones = ZoneId.getAvailableZoneIds();
+        if(!zones.contains(targetZoneStr)) {
+            log.warn("targetZoneStr '" + targetZoneStr + "' is not a valid Olson ZoneId. Defaulting to UTC.");
+            targetZoneStr = "UTC";
+        }
+    }
+} catch (Exception tze) {
+    // Variable is not boud in scope because it was omitted from the transform JSON
+    log.debug( "timezone variable is not bound/defined in scope. Defaulting to UTC. ");
+}
+
+// Optional 'localHourToSet' is dynamically bound to the interpreter scope from the transform attributes map
+int hourToSet = 0; 
+try {
+    if(localHourToSet == void) {
+      log.debug("localHourToSet not defined, using default 0 (start of day)");
+    } else {
+        String hourStr = localHourToSet.toString().trim();
+        if(!hourStr.isEmpty()) {
+            hourToSet = Integer.parseInt(hourStr);
+        }
+    }
+} catch (Exception htse) {
+    // variable is not bound in scope because it was omitted form the transform JSON
+    log.debug( "localHourToSet variable is not bound/defined in scope. Defaulting to 0 (start of day). ");
+    hourToSet = 0;
+}
+
+// Validate hour range defensively to protect the pipeline
+if (hourToSet < 0 || hourToSet > 23) {
+    log.warn("localHourToSet '" + hourToSet + "' is out of range (0-23). Defaulting to 0 (start of day).");
+    hourToSet = 0;
+}
+
+DateTimeFormatter formatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
+String formattedResult = null;
+
+try {
+    if(inputStr.contains("T") && inputStr.length() > 10) {
+        // Attempt to parse as a full ISO 8601 date-time (e.g., "2026-08-20T17:48:02.123Z")
+        Instant utcInstant = Instant.parse(inputStr.toString());
+
+        // Resolve the target Olson ZoneId
+        ZoneId targetZone = ZoneId.of(targetZoneStr);
+
+        // Convert UTC Instant to target ZonedDateTime
+        ZonedDateTime localDateTime = utcInstant.atZone(targetZone);
+
+        // Format back to standard ISO-8601 with timezone offset
+        formattedResult = formatter.format(localDateTime);
+
+        log.debug("Successfully converted full ISO 8601 date '" + inputStr + "' to local timezone '" + targetZoneStr + "': " + formattedResult);
+
+    } else {
+        // do simple date conversion and set hour
+        // Parse as a simple date (e.g., "yyyy-MM-dd")
+        LocalDate localDate = LocalDate.parse(inputStr.toString());
+
+        // Resolve the target Olson ZoneId
+        ZoneId targetZone = ZoneId.of(targetZoneStr);
+
+        // Convert to ZonedDateTime, optionally setting a specific hour from 'localHourToSet'
+        ZonedDateTime localDateTime;
+
+        localDateTime = localDate.atStartOfDay(targetZone).withHour(hourToSet);
+        
+        formattedResult = formatter.format(localDateTime);
+
+        log.debug("Successfully converted LocalDate '" + inputStr + "' to local timezone '" + targetZoneStr + "': " + formattedResult);
+    }
+
+} catch (DateTimeParseException e) {
+    log.error("Error parsing input '" + input + "'. It is not a valid ISO 8601 date-time or a yyyy-MM-dd date: " + e.getMessage());
+    return null;
+
+}
+
+return formattedResult;
+]]>
+  </Source>
+</Rule>
